@@ -279,6 +279,7 @@ export class DenoWorker {
     private _terminated: boolean;
     private _stdout: Readable;
     private _stderr: Readable;
+    private _failureError?: string;
 
     /**
      * Creates a new DenoWorker instance and injects the given script.
@@ -384,173 +385,187 @@ export class DenoWorker {
         });
 
         this._httpServer.listen({ host: '127.0.0.1', port: 0 }, () => {
-            if (this._terminated) {
-                this._httpServer.close();
-                return;
-            }
-            const addr = this._httpServer.address();
-            let connectAddress: string;
-            let allowAddress: string;
-            if (typeof addr === 'string') {
-                connectAddress = addr;
-            } else {
-                connectAddress = `ws://${addr.address}:${addr.port}`;
-                allowAddress = `${addr.address}:${addr.port}`;
-            }
-
-            let scriptArgs: string[];
-
-            if (typeof script === 'string') {
-                scriptArgs = ['script', script];
-            } else {
-                scriptArgs = ['import', script.href];
-            }
-
-            let runArgs = [] as string[];
-
-            addOption(runArgs, '--reload', this._options.reload);
-            if (this._options.denoUnstable === true) {
-                runArgs.push('--unstable');
-            } else if (this._options.denoUnstable) {
-                for (let [key] of Object.entries(
-                    this._options.denoUnstable
-                ).filter(([_key, val]) => val)) {
-                    runArgs.push(
-                        `--unstable-${key.replace(
-                            /[A-Z]/g,
-                            (m) => '-' + m.toLowerCase()
-                        )}`
-                    );
+            try {
+                if (this._terminated) {
+                    this._httpServer.close();
+                    return;
                 }
-            }
-            addOption(runArgs, '--cached-only', this._options.denoCachedOnly);
-            addOption(runArgs, '--no-check', this._options.denoNoCheck);
-            if (!this._options.denoConfig) {
-                addOption(runArgs, '--no-config', true);
-            } else {
-                addOption(runArgs, '--config', [this._options.denoConfig]);
-            }
-            addOption(runArgs, '--no-npm', this._options.denoNoNPM);
-            addOption(
-                runArgs,
-                '--unsafely-ignore-certificate-errors',
-                this._options.unsafelyIgnoreCertificateErrors
-            );
-            if (this._options.location) {
-                addOption(runArgs, '--location', [this._options.location]);
-            }
+                const addr = this._httpServer.address();
+                let connectAddress: string;
+                let allowAddress: string;
+                if (typeof addr === 'string') {
+                    connectAddress = addr;
+                } else {
+                    connectAddress = `ws://${addr.address}:${addr.port}`;
+                    allowAddress = `${addr.address}:${addr.port}`;
+                }
 
-            if (this._options.denoV8Flags.length > 0) {
-                addOption(runArgs, '--v8-flags', this._options.denoV8Flags);
-            }
+                let scriptArgs: string[];
 
-            if (this._options.denoImportMapPath) {
-                addOption(runArgs, '--import-map', [
-                    this._options.denoImportMapPath,
-                ]);
-            }
+                if (typeof script === 'string') {
+                    scriptArgs = ['script', script];
+                } else {
+                    scriptArgs = ['import', script.href];
+                }
 
-            if (this._options.denoLockFilePath) {
-                addOption(runArgs, '--lock', [this._options.denoLockFilePath]);
-            }
+                let runArgs = [] as string[];
 
-            if (this._options.permissions) {
+                addOption(runArgs, '--reload', this._options.reload);
+                if (this._options.denoUnstable === true) {
+                    runArgs.push('--unstable');
+                } else if (this._options.denoUnstable) {
+                    for (let [key] of Object.entries(
+                        this._options.denoUnstable
+                    ).filter(([_key, val]) => val)) {
+                        runArgs.push(
+                            `--unstable-${key.replace(
+                                /[A-Z]/g,
+                                (m) => '-' + m.toLowerCase()
+                            )}`
+                        );
+                    }
+                }
                 addOption(
                     runArgs,
-                    '--allow-all',
-                    this._options.permissions.allowAll
+                    '--cached-only',
+                    this._options.denoCachedOnly
                 );
-                if (!this._options.permissions.allowAll) {
-                    addOption(
-                        runArgs,
-                        '--allow-net',
-                        typeof this._options.permissions.allowNet === 'boolean'
-                            ? this._options.permissions.allowNet
-                            : this._options.permissions.allowNet
-                            ? [
-                                  ...this._options.permissions.allowNet,
-                                  allowAddress,
-                              ]
-                            : [allowAddress]
-                    );
-                    // Ensures the `allowAddress` isn't denied
-                    const deniedAddresses = this._options.permissions.denyNet?.filter(
-                        (address) => address !== allowAddress
-                    );
-                    addOption(
-                        runArgs,
-                        '--deny-net',
-                        // Ensures an empty array isn't used
-                        deniedAddresses?.length ? deniedAddresses : false
-                    );
-                    addOption(
-                        runArgs,
-                        '--allow-read',
-                        this._options.permissions.allowRead
-                    );
-                    addOption(
-                        runArgs,
-                        '--allow-write',
-                        this._options.permissions.allowWrite
-                    );
-                    addOption(
-                        runArgs,
-                        '--allow-env',
-                        this._options.permissions.allowEnv
-                    );
-                    addOption(
-                        runArgs,
-                        '--allow-plugin',
-                        this._options.permissions.allowPlugin
-                    );
-                    addOption(
-                        runArgs,
-                        '--allow-hrtime',
-                        this._options.permissions.allowHrtime
-                    );
+                addOption(runArgs, '--no-check', this._options.denoNoCheck);
+                if (!this._options.denoConfig) {
+                    addOption(runArgs, '--no-config', true);
+                } else {
+                    addOption(runArgs, '--config', [this._options.denoConfig]);
                 }
-            }
-
-            if (this._options.denoExtraFlags.length > 0) {
-                runArgs.push(...this._options.denoExtraFlags);
-            }
-
-            this._process = spawn(
-                this._options.denoExecutable,
-                [
-                    'run',
-                    ...runArgs,
-                    this._options.denoBootstrapScriptPath,
-                    connectAddress,
-                    ...scriptArgs,
-                ],
-                this._options.spawnOptions
-            );
-            this._process.on('exit', (code: number, signal: string) => {
-                this.terminate();
-
-                if (this.onexit) {
-                    this.onexit(code, signal);
+                addOption(runArgs, '--no-npm', this._options.denoNoNPM);
+                addOption(
+                    runArgs,
+                    '--unsafely-ignore-certificate-errors',
+                    this._options.unsafelyIgnoreCertificateErrors
+                );
+                if (this._options.location) {
+                    addOption(runArgs, '--location', [this._options.location]);
                 }
-                for (let onexit of this._onexitListeners) {
-                    onexit(code, signal);
+
+                if (this._options.denoV8Flags.length > 0) {
+                    addOption(runArgs, '--v8-flags', this._options.denoV8Flags);
                 }
-            });
 
-            this._stdout = <Readable>this._process.stdout;
-            this._stderr = <Readable>this._process.stderr;
+                if (this._options.denoImportMapPath) {
+                    addOption(runArgs, '--import-map', [
+                        this._options.denoImportMapPath,
+                    ]);
+                }
 
-            if (this._options.logStdout) {
-                this.stdout.setEncoding('utf-8');
-                this.stdout.on('data', (data) => {
-                    console.log('[deno]', data);
+                if (this._options.denoLockFilePath) {
+                    addOption(runArgs, '--lock', [
+                        this._options.denoLockFilePath,
+                    ]);
+                }
+
+                if (this._options.permissions) {
+                    addOption(
+                        runArgs,
+                        '--allow-all',
+                        this._options.permissions.allowAll
+                    );
+                    if (!this._options.permissions.allowAll) {
+                        addOption(
+                            runArgs,
+                            '--allow-net',
+                            typeof this._options.permissions.allowNet ===
+                                'boolean'
+                                ? this._options.permissions.allowNet
+                                : this._options.permissions.allowNet
+                                ? [
+                                      ...this._options.permissions.allowNet,
+                                      allowAddress,
+                                  ]
+                                : [allowAddress]
+                        );
+                        // Ensures the `allowAddress` isn't denied
+                        const deniedAddresses = this._options.permissions.denyNet?.filter(
+                            (address) => address !== allowAddress
+                        );
+                        addOption(
+                            runArgs,
+                            '--deny-net',
+                            // Ensures an empty array isn't used
+                            deniedAddresses?.length ? deniedAddresses : false
+                        );
+                        addOption(
+                            runArgs,
+                            '--allow-read',
+                            this._options.permissions.allowRead
+                        );
+                        addOption(
+                            runArgs,
+                            '--allow-write',
+                            this._options.permissions.allowWrite
+                        );
+                        addOption(
+                            runArgs,
+                            '--allow-env',
+                            this._options.permissions.allowEnv
+                        );
+                        addOption(
+                            runArgs,
+                            '--allow-plugin',
+                            this._options.permissions.allowPlugin
+                        );
+                        addOption(
+                            runArgs,
+                            '--allow-hrtime',
+                            this._options.permissions.allowHrtime
+                        );
+                    }
+                }
+
+                if (this._options.denoExtraFlags.length > 0) {
+                    runArgs.push(...this._options.denoExtraFlags);
+                }
+
+                this._process = spawn(
+                    this._options.denoExecutable,
+                    [
+                        'run',
+                        ...runArgs,
+                        this._options.denoBootstrapScriptPath,
+                        connectAddress,
+                        ...scriptArgs,
+                    ],
+                    this._options.spawnOptions
+                );
+                this._process.on('exit', (code: number, signal: string) => {
+                    this.terminate();
+
+                    if (this.onexit) {
+                        this.onexit(code, signal);
+                    }
+                    for (let onexit of this._onexitListeners) {
+                        onexit(code, signal);
+                    }
                 });
-            }
-            if (this._options.logStderr) {
-                this.stderr.setEncoding('utf-8');
-                this.stderr.on('data', (data) => {
-                    console.log('[deno]', data);
-                });
+
+                this._stdout = <Readable>this._process.stdout;
+                this._stderr = <Readable>this._process.stderr;
+
+                if (this._options.logStdout) {
+                    this.stdout.setEncoding('utf-8');
+                    this.stdout.on('data', (data) => {
+                        console.log('[deno]', data);
+                    });
+                }
+                if (this._options.logStderr) {
+                    this.stderr.setEncoding('utf-8');
+                    this.stderr.on('data', (data) => {
+                        console.log('[deno]', data);
+                    });
+                }
+            } catch (e) {
+                this._failureError = `Failed to start Deno worker server: ${e.message}`;
+                // Informing client about the server failure
+                this.onexit?.(e.errno ?? -1, this._failureError);
+                throw e;
             }
         });
     }
@@ -691,6 +706,10 @@ export class DenoWorker {
         data: any,
         transfer?: Transferrable[]
     ) {
+        // Prevent collecting messages if the server is down
+        if (this._failureError) {
+            throw new Error(this._failureError);
+        }
         if (this._terminated) {
             return;
         }
