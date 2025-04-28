@@ -1,10 +1,13 @@
 {
-    "name": "@borgius/deno-vm",
+    "name": "borgius-deno-vm",
     "version": "0.13.1",
     "description": "A VM module that provides a secure runtime environment via Deno.",
     "main": "./dist/cjs/index.js",
     "types": "./dist/typings/index.d.ts",
     "module": "./dist/esm/index.js",
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "npm run clean && rollup -c",
         "watch": "npm run clean && rollup -cw",
